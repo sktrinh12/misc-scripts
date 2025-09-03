@@ -4,7 +4,9 @@ import sqlite3
 from datetime import datetime
 import os
 
+home_path = os.path.expanduser("~")
 db_file = 'chase-expenses.db'
+db_path = os.path.join(home_path, 'Documents', 'finances', 'chase', db_file)
 
 def parse_date(date_str):
     date_formats = ["%m/%d/%Y", "%Y-%m-%d"]
@@ -20,7 +22,7 @@ def normalize_amount(amount_str):
     return -abs(amount)  # Always negative
 
 def insert_expenses(rows):
-    conn = sqlite3.connect(db_file)
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
     cursor.execute('''
