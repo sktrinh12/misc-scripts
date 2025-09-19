@@ -3,3 +3,4 @@
 *.json
 results
 terraform
+/azure_workitem_llm/chroma/
