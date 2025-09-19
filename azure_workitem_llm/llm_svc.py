@@ -1,0 +1,132 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import chromadb
+from sentence_transformers import SentenceTransformer
+import requests
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+client = chromadb.PersistentClient(path="./chroma")
+collection = client.get_collection("workitems")
+
+class QueryRequest(BaseModel):
+    text: str
+    use_llm: bool = False 
+
+
+MAX_CHUNKS = 10 # limit to top N chunks (from chroma)
+MAX_CHARS_PER_CONTEXT = 4000  # safe token approximation for prompt
+MAX_LLM_INPUT_CHUNKS = 700
+
+def get_context(query: str, n_results: int = MAX_CHUNKS):
+    """
+    Query Chroma for most relevant chunks.
+    """
+    query_embedding = embedding_model.encode([query]).tolist()[0]
+    
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=n_results
+    )
+    
+    urls = []
+    context_chunks = []
+    for idx, (doc, meta, doc_id) in enumerate(zip(
+        results["documents"][0],
+        results["metadatas"][0],
+        results["ids"][0]
+    )):
+        work_id = int(doc_id.split("_")[0])
+        title = meta.get("title", "Untitled Work Item")
+
+        truncated_doc = doc[:MAX_LLM_INPUT_CHUNKS]
+        context_chunks.append(f"[WORK ITEM {work_id} | COMMENT {idx}] {truncated_doc}")
+        url = f"https://dev.azure.com/preludetx/PreludeTx_Dotmatics_2024/_boards/board/t/PreludeTx_Dotmatics_2024%20Team/Stories?workitem={work_id}"
+        urls.append({
+            "id": work_id,
+            "title": title,
+            "url": url
+        })
+
+    seen = set()
+    unique_urls = []
+    for u in urls:
+        if u["id"] not in seen:
+            seen.add(u["id"])
+            unique_urls.append(u)
+
+    urls = sorted(unique_urls, key=lambda x: x["id"], reverse=True)
+    full_context = "\n".join(context_chunks)
+    if len(full_context) > MAX_CHARS_PER_CONTEXT:
+        full_context = full_context[:MAX_CHARS_PER_CONTEXT] + "\n...[truncated]"
+
+    return full_context, urls
+
+def ask_ollama(context: str, question: str, model: str = "phi3"):
+    """
+    Query Ollama model with structured prompt and chunked context.
+    """
+    prompt = f"""
+You are an assistant for Azure DevOps work items. Answer the question ONLY using the following work item context.
+If the answer cannot be found, respond: "I'm not sure, but here is the summarised context."
+
+Context:
+{context}
+
+Question: {question}
+Answer:
+"""
+
+    ollama_url = "http://localhost:11434/api/generate"
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False 
+    }
+    try:
+        response = requests.post(ollama_url, json=payload)
+        # Raise an exception for HTTP status codes >= 400
+        response.raise_for_status()
+        data = response.json()
+
+        if "error" in data:
+            raise HTTPException(status_code=400, detail=f"Ollama API returned error: {data['error']}")
+
+        return data.get("response", "No response from Ollama.")
+
+    except requests.exceptions.HTTPError as e:
+        # Specific HTTP errors from Ollama server
+        raise HTTPException(status_code=response.status_code, detail=f"Ollama HTTP error: {e}")
+    except requests.exceptions.RequestException as e:
+        # Network or connection errors
+        raise HTTPException(status_code=500, detail=f"Error connecting to Ollama: {e}")
+
+
+@app.post("/query")
+def query_rag(request: QueryRequest):
+    context, urls = get_context(request.text)
+
+    if request.use_llm:
+        answer = ask_ollama(context, request.text)
+    else:
+        answer = "None"
+
+    return {
+        "answer": answer,
+        "context": context,
+        "urls": urls
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
