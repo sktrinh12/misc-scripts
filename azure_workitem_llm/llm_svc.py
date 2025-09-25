@@ -77,8 +77,7 @@ def ask_ollama(context: str, question: str, model: str = "phi3"):
     Query Ollama model with structured prompt and chunked context.
     """
     prompt = f"""
-You are an assistant for Azure DevOps work items. Answer the question ONLY using the following work item context.
-If the answer cannot be found, respond: "I'm not sure, but here is the summarised context."
+You are an assistant for Azure DevOps work items. Answer the question based off of the following work item context.
 
 Context:
 {context}
