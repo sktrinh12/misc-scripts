@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from bs4 import BeautifulSoup
 
@@ -191,6 +192,8 @@ def prepare_embedding_text(workitem: dict) -> list:
             "metadata": {
                 "title": title,
                 "section": "main",
+                "description": description,
+                "acceptance_criteria": acceptance,
                 "type": workitem.get("type"),
                 "state": workitem.get("state"),
                 "assignedTo": workitem.get("assignedTo") or "",
@@ -204,7 +207,9 @@ def prepare_embedding_text(workitem: dict) -> list:
     comments = workitem.get("comments", [])
     for idx, c in enumerate(comments):
         author = c.get("createdBy", {}).get("displayName", "Unknown")
-        date = c.get("createdDate", "")
+        iso_str = c.get("createdDate", "")
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        date = dt.strftime("%B %d, %Y at %H:%M UTC")  
         text = clean_text(c.get("text", ""))
 
         if not text:
@@ -215,10 +220,12 @@ def prepare_embedding_text(workitem: dict) -> list:
             records.append({
                 "id": workitem.get("id"),
                 "chunk_index": f"c{idx}_{jdx}",  # distinguish comment chunks
-                "embedding_text": f"[COMMENT] {author} ({date}): {chunk}",
+                "embedding_text": f"{author} commented on ({date}): {chunk}",
                 "metadata": {
                     "title": title,
                     "section": "comment",
+                    "description": description,
+                    "acceptance_criteria": acceptance,
                     "author": author,
                     "createdDate": date,
                     "type": workitem.get("type"),
