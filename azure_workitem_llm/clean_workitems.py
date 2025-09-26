@@ -93,8 +93,12 @@ def clean_text(text: str) -> str:
     # Convert HTML entities to text
     text = BeautifulSoup(text, "html.parser").get_text(separator=" ")
 
-    # Replace mentions
-    text = re.sub(r'@<([\w-]+)>', replace_mention, text)
+    # Replace mentions, and replace @ symbols
+    text = re.sub(
+        r'@',
+        '',
+        re.sub(r'@<([\w-]+)>', replace_mention, text)
+    )
 
     # Replace markdown images
     text = re.sub(r'!\[.*?\]\(.*?\)', '[IMAGE]', text)
