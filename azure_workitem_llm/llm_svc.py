@@ -21,7 +21,7 @@ collection = client.get_collection("workitems")
 
 class QueryRequest(BaseModel):
     text: str
-    use_llm: bool = False 
+    model: str
 
 
 MAX_CHUNKS = 10 # limit to top N chunks (from chroma)
@@ -72,12 +72,30 @@ def get_context(query: str, n_results: int = MAX_CHUNKS):
 
     return full_context, urls
 
-def ask_ollama(context: str, question: str, model: str = "phi3"):
+
+def get_ollama_models() -> list[str]:
+    ollama_url = "http://localhost:11434/api/tags"
+    try:
+        response = requests.get(ollama_url)
+        response.raise_for_status()
+        data = response.json()
+        return [m["name"] for m in data.get("models", [])]
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Error fetching models from Ollama: {e}")
+
+
+def ask_ollama(context: str, question: str, model: str ):
     """
     Query Ollama model with structured prompt and chunked context.
     """
     prompt = f"""
-You are an assistant for Azure DevOps work items. Answer the question based off of the following work item context.
+You are an assistant for Azure DevOps work items.
+Use the provided context to answer the question.
+The context is formatted as [WORK ITEM NUMBER | COMMENT CHUNK INDEX].
+- The work item number is the unique identifier of a User Story or Bug.
+- The comment chunk index represents a 200-character chunk of a comment.
+Only use the context provided. Do not invent information.
+Keep answers concise and professional.
 
 Context:
 {context}
@@ -115,8 +133,9 @@ Answer:
 def query_rag(request: QueryRequest):
     context, urls = get_context(request.text)
 
-    if request.use_llm:
-        answer = ask_ollama(context, request.text)
+
+    if request.model:
+        answer = ask_ollama(context, request.text, request.model)
     else:
         answer = "None"
 
@@ -125,6 +144,7 @@ def query_rag(request: QueryRequest):
         "context": context,
         "urls": urls
     }
+
 
 if __name__ == "__main__":
     import uvicorn
