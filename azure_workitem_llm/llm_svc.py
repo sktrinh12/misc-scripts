@@ -4,12 +4,18 @@ from pydantic import BaseModel
 import chromadb
 from sentence_transformers import SentenceTransformer
 import requests
+import asyncio
 
 app = FastAPI()
 
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -18,6 +24,7 @@ app.add_middleware(
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 client = chromadb.PersistentClient(path="./chroma")
 collection = client.get_collection("workitems")
+ollama_base_url = "http://localhost:11434/api"
 
 class QueryRequest(BaseModel):
     text: str
@@ -74,7 +81,7 @@ def get_context(query: str, n_results: int = MAX_CHUNKS):
 
 
 def get_ollama_models() -> list[str]:
-    ollama_url = "http://localhost:11434/api/tags"
+    ollama_url = f"{ollama_base_url}/tags"
     try:
         response = requests.get(ollama_url)
         response.raise_for_status()
@@ -104,7 +111,7 @@ Question: {question}
 Answer:
 """
 
-    ollama_url = "http://localhost:11434/api/generate"
+    ollama_url = f"{ollama_base_url}/generate"
     payload = {
         "model": model,
         "prompt": prompt,
@@ -143,6 +150,18 @@ def query_rag(request: QueryRequest):
         "answer": answer,
         "context": context,
         "urls": urls
+    }
+
+@app.post("/mock-query")
+async def mock_query():
+    await asyncio.sleep(4)
+    return {
+        "answer": f"This is a mock response",
+        "context": "[WORK ITEM XXX | COMMENT XX ] Here is some mock context text to simulate embeddings or long content.",
+        "urls": [
+            {"id": 1, "title": "Example work item", "url": "https://example.com/item1"},
+            {"id": 2, "title": "Another item with a longer title to test truncation in UI", "url": "https://example.com/item2"},
+        ],
     }
 
 
