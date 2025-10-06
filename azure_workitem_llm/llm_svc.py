@@ -173,7 +173,6 @@ def query_rag(request: QueryRequest):
     if request.model:
         # answer = ask_ollama(context, request.text, request.model)
         answer = ask_hf(context, request.text, request.model)
-        # print(answer.choices[0].message.content)
     else:
         answer = "None"
 
@@ -199,5 +198,4 @@ async def mock_query():
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)
