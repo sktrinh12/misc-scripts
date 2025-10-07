@@ -32,6 +32,7 @@ client = InferenceClient(
     api_key=os.environ["HF_TOKEN"],
 )
 
+
 class QueryRequest(BaseModel):
     text: str
     model: str
@@ -76,6 +77,7 @@ def get_context(query: str, n_results: int = MAX_CHUNKS):
         full_context = full_context[:MAX_CHARS_PER_CONTEXT] + "\n...[truncated]"
 
     return full_context, urls
+
 
 #
 # def get_ollama_models() -> list[str]:
@@ -147,23 +149,19 @@ def ask_hf(context: str, question: str, model: str):
             - The work item number is the unique identifier of a User Story or Bug.
             - The comment chunk index represents a 200-character chunk of a comment.
             Only use the context provided. Do not invent information.
-            Keep answers concise and professional."""
+            Keep answers concise and professional.""",
         },
         {
             "role": "user",
             "content": f"""Context:
             {context}
             
-            Question: {question}"""
-        }
+            Question: {question}""",
+        },
     ]
 
-    completion = client.chat.completions.create(
-        model=model,
-        messages=messages
-    )
+    completion = client.chat.completions.create(model=model, messages=messages)
     return completion
-
 
 
 @app.post("/query")
@@ -176,7 +174,11 @@ def query_rag(request: QueryRequest):
     else:
         answer = "None"
 
-    return {"answer": answer.choices[0].message.content, "context": context, "urls": urls}
+    return {
+        "answer": answer.choices[0].message.content,
+        "context": context,
+        "urls": urls,
+    }
 
 
 @app.post("/mock-query")
@@ -198,4 +200,5 @@ async def mock_query():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
