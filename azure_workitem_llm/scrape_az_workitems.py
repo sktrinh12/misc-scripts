@@ -2,10 +2,7 @@ import os
 import requests
 import json
 from datetime import datetime
-
 from typing import Iterable, List, Union
-# from chromadb import Client
-# from chromadb.utils import embedding_functions
 
 ORG_NAME = "preludetx"
 PROJECT_NAME = "PreludeTx_Dotmatics_2024"
