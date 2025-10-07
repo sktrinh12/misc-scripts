@@ -203,7 +203,8 @@ def prepare_embedding_text(workitem: dict) -> list:
                 "assignedTo": workitem.get("assignedTo") or "",
                 "storyPoints": workitem.get("story_points") or 0,
                 "tags": workitem.get("tags") or "",
-                "createdDate": workitem.get("createdDate", "")
+                "createdDate": workitem.get("createdDate", ""),
+                "changedDate": workitem.get("changedDate", "")
             }
         })
 
@@ -214,6 +215,9 @@ def prepare_embedding_text(workitem: dict) -> list:
         iso_str = c.get("createdDate", "")
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
         date = dt.strftime("%B %d, %Y at %H:%M UTC")  
+        iso_str = c.get("modifiedDate", "")
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        mod_date = dt.strftime("%B %d, %Y at %H:%M UTC")
         text = clean_text(c.get("text", ""))
 
         if not text:
@@ -232,6 +236,7 @@ def prepare_embedding_text(workitem: dict) -> list:
                     "acceptance_criteria": acceptance,
                     "author": author,
                     "createdDate": date,
+                    "modifiedDate": mod_date, 
                     "type": workitem.get("type"),
                     "state": workitem.get("state"),
                     "assignedTo": workitem.get("assignedTo") or "",
