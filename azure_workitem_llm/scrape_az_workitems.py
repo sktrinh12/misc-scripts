@@ -106,6 +106,7 @@ if __name__ == "__main__":
     SELECT [System.Id], [System.Title]
     FROM WorkItems
     WHERE [System.TeamProject] = 'PreludeTx_Dotmatics_2024'
+    AND [System.ChangedDate] <= '2025-10-18'
     ORDER BY [System.ChangedDate] DESC
     """
     wiql_res = run_wiql(WIQL)
