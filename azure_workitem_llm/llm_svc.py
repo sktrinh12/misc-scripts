@@ -140,21 +140,21 @@ def ask_hf(context: str, question: str, model: str):
     """
     messages = [
         {
-            "role": "assistant",
-            "content": f"""
-            Use the provided context to answer the question about Azure DevOps work items.
+            "role": "system",
+            "content": """You are an assistant for Azure DevOps work items.
+            Use the provided context to answer the question.
             The context is formatted as [WORK ITEM NUMBER | COMMENT CHUNK INDEX].
             - The work item number is the unique identifier of a User Story or Bug.
             - The comment chunk index represents a 200-character chunk of a comment.
             Only use the context provided. Do not invent information.
-            Keep answers concise and professional.
-
-            Context:
+            Keep answers concise and professional."""
+        },
+        {
+            "role": "user",
+            "content": f"""Context:
             {context}
-
-            Question: {question}
-            Answer:
-            """,
+            
+            Question: {question}"""
         }
     ]
 
