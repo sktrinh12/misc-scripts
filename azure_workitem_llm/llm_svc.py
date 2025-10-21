@@ -23,13 +23,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+CHROMA_TOKEN = os.getenv('CHROMA_TOKEN')
+HF_TOKEN = os.getenv("HF_TOKEN")
+
+if not CHROMA_TOKEN:
+    raise Exception('CHROMA_TOKEN environment variable is required')
+
+if not HF_TOKEN:
+    raise Exception('HF_TOKEN environment variable is required')
+
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-client = chromadb.PersistentClient(path="./chroma")
-collection = client.get_collection("workitems")
-# ollama_base_url = "http://localhost:11434/api"
-client = InferenceClient(
+client_chroma = chromadb.HttpClient(
+    host="https://chroma-ado.duckdns.org",
+    headers={"Authorization": f"Basic {CHROMA_TOKEN}"}
+)
+collection = client_chroma.get_collection("workitems")
+client_hf = InferenceClient(
     provider="auto",
-    api_key=os.environ["HF_TOKEN"],
+    api_key=HF_TOKEN,
 )
 
 
@@ -160,7 +171,7 @@ def ask_hf(context: str, question: str, model: str):
         },
     ]
 
-    completion = client.chat.completions.create(model=model, messages=messages)
+    completion = client_hf.chat.completions.create(model=model, messages=messages)
     return completion
 
 
