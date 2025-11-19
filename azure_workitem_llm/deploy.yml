@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: sktrinh12/llm-ado-chat-app:latest
+          imagePullPolicy: Always
+          ports:
+          - containerPort: 8000
+          env:
+          - name: CHROMA_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: chromadb-auth
+                key: token 
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-secret
+                key: HF_TOKEN
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: app
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chromadb-sa
+  namespace: app
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::581351078906:role/ChromaDBS3AccessRole
