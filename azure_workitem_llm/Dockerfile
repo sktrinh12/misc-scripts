@@ -7,6 +7,8 @@ RUN pip install --no-cache-dir torch==2.9.1+cpu --index-url https://download.pyt
 RUN pip install -r requirements.txt
 
 COPY llm_svc.py .
+ARG CHROMA_URL
+ENV CHROMA_URL=${CHROMA_URL}
 
 EXPOSE 8000
 
