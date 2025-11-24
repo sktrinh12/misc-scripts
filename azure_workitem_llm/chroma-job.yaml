@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chroma-s3-sync
+  namespace: app
+spec:
+  template:
+    spec:
+      serviceAccountName: chroma-s3-sa
+      restartPolicy: OnFailure
+      containers:
+      - name: sync
+        image: amazon/aws-cli:2.13.14
+        command: ["sh", "-c"]
+        args:
+          # Adjust source path if needed
+          - aws s3 sync s3://preludetx-strinh/chroma /data
+        volumeMounts:
+        - name: chroma-data
+          mountPath: /data
+      volumes:
+      - name: chroma-data
+        persistentVolumeClaim:
+          claimName: chroma-data-pvc
