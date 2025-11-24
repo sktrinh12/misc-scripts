@@ -3,42 +3,42 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import chromadb
 from sentence_transformers import SentenceTransformer
-from huggingface_hub import InferenceClient
+from huggingface_hub import AsyncInferenceClient
 import requests
 import asyncio
 import os
 
 app = FastAPI()
 
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-CHROMA_TOKEN = os.getenv('CHROMA_TOKEN')
+CHROMA_TOKEN = os.getenv("CHROMA_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
+CHROMA_URL = os.getenv("CHROMA_URL", "http://localhost:8000")
+
+# for ec2 setup "https://chroma-ado.duckdns.org"
 
 if not CHROMA_TOKEN:
-    raise Exception('CHROMA_TOKEN environment variable is required')
+    raise Exception("CHROMA_TOKEN environment variable is required")
 
 if not HF_TOKEN:
-    raise Exception('HF_TOKEN environment variable is required')
+    raise Exception("HF_TOKEN environment variable is required")
+
+print(f"CHROMA_URL: {CHROMA_URL}")
 
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 client_chroma = chromadb.HttpClient(
-    host="https://chroma-ado.duckdns.org",
-    headers={"Authorization": f"Basic {CHROMA_TOKEN}"}
+    host=CHROMA_URL, headers={"Authorization": f"Basic {CHROMA_TOKEN}"}
 )
 collection = client_chroma.get_collection("workitems")
-client_hf = InferenceClient(
+client_hf = AsyncInferenceClient(
     provider="auto",
     api_key=HF_TOKEN,
 )
@@ -147,7 +147,7 @@ Answer:
         raise HTTPException(status_code=500, detail=f"Error connecting to Ollama: {e}")
 
 
-def ask_hf(context: str, question: str, model: str):
+async def ask_hf(context: str, question: str, model: str):
     """
     Query HuggingFace inference API model with structured prompt and chunked context.
     """
@@ -171,17 +171,19 @@ def ask_hf(context: str, question: str, model: str):
         },
     ]
 
-    completion = client_hf.chat.completions.create(model=model, messages=messages)
+    completion = await client_hf.chat.completions.create(model=model, messages=messages)
     return completion
 
 
 @app.post("/query")
-def query_rag(request: QueryRequest):
+async def query_rag(request: QueryRequest):
     context, urls = get_context(request.text)
 
+    # print('get context completed')
+    # print(context)
     if request.model:
         # answer = ask_ollama(context, request.text, request.model)
-        answer = ask_hf(context, request.text, request.model)
+        answer = await ask_hf(context, request.text, request.model)
     else:
         answer = "None"
 
