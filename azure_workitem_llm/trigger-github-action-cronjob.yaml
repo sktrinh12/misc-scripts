@@ -74,7 +74,10 @@ spec:
 
                 echo "GitHub Action finished!"
                 echo "Running Chroma sync (S3 → PVC)..."
-                aws s3 sync s3://preludetx-strinh/chroma-test /data
+                kubectl scale deploy/chromadb -n app --replicas=0
+                rm -rf /data/*
+                aws s3 sync s3://preludetx-strinh/chroma-test /data --delete
+                kubectl scale deploy/chromadb -n app --replicas=1
                 echo "All done!"
             volumeMounts:
                 - name: chroma-data
