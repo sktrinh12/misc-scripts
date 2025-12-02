@@ -11,10 +11,20 @@ spec:
       containers:
       - name: sync
         image: amazon/aws-cli:2.13.14
+        env:
+          - name: CHROMA_DIR
+            valueFrom:
+              configMapKeyRef:
+                name: chroma-config
+                key: CHROMA_DIR
+          - name: S3_BUCKET
+            valueFrom:
+              configMapKeyRef:
+                name: chroma-config
+                key: S3_BUCKET
         command: ["sh", "-c"]
         args:
-          # Adjust source path if needed
-          - aws s3 sync s3://preludetx-strinh/chroma /data
+          - aws s3 sync s3://$S3_BUCKET/$CHROMA_DIR /data
         volumeMounts:
         - name: chroma-data
           mountPath: /data
