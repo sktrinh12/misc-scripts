@@ -1,0 +1,86 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: trigger-github-chroma-sync
+  namespace: app
+spec:
+  schedule: "0 16 * * *"   # 11:00 AM EST (16:00 UTC)
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: chroma-s3-sa
+          restartPolicy: OnFailure
+          containers:
+          - name: orchestrator
+            image: sktrinh12/curl-jq:latest
+            env:
+              # GitHub token from Secret
+              - name: GITHUB_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: github-token-secret
+                    key: token
+              # ConfigMap values
+              - name: GITHUB_ORG
+                valueFrom:
+                  configMapKeyRef:
+                    name: github-workflow-config
+                    key: GITHUB_ORG
+              - name: GITHUB_REPO
+                valueFrom:
+                  configMapKeyRef:
+                    name: github-workflow-config
+                    key: GITHUB_REPO
+              - name: GITHUB_WORKFLOW_FILE
+                valueFrom:
+                  configMapKeyRef:
+                    name: github-workflow-config
+                    key: GITHUB_WORKFLOW_FILE
+              - name: GITHUB_BRANCH
+                valueFrom:
+                  configMapKeyRef:
+                    name: github-workflow-config
+                    key: GITHUB_BRANCH
+            command: ["sh", "-c"]
+            args:
+              - |
+                echo "Triggering GitHub Action..."
+                curl -X POST \
+                  -H "Authorization: token $GITHUB_TOKEN" \
+                  -H "Accept: application/vnd.github+json" \
+                  https://api.github.com/repos/$GITHUB_ORG/$GITHUB_REPO/actions/workflows/$GITHUB_WORKFLOW_FILE/dispatches \
+                  -d "{\"ref\": \"$GITHUB_BRANCH\"}"
+
+                echo "GitHub Action triggered. Waiting for completion. Initial sleep of 380 seconds..."
+                sleep 380
+
+                # Poll until success
+                while true; do
+                  STATUS=$(curl -s \
+                    -H "Authorization: token $GITHUB_TOKEN" \
+                    "https://api.github.com/repos/$GITHUB_ORG/$GITHUB_REPO/actions/runs?event=workflow_dispatch" \
+                    | jq -r '.workflow_runs[0].status')
+
+                  echo "Latest workflow status: $STATUS"
+
+                  if [ "$STATUS" = "completed" ]; then
+                    break
+                  fi
+
+                  echo "Sleeping 30s..."
+                  sleep 30
+                done
+
+                echo "GitHub Action finished!"
+                echo "Running Chroma sync (S3 → PVC)..."
+                aws s3 sync s3://preludetx-strinh/chroma-test /data
+                echo "All done!"
+            volumeMounts:
+                - name: chroma-data
+                  mountPath: /data
+
+          volumes:
+            - name: chroma-data
+              persistentVolumeClaim:
+                claimName: chroma-data-pvc
