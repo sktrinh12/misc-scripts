@@ -12,7 +12,7 @@ def main():
     # Initialize Chroma client (in-memory)
     # client = chromadb.Client()
     # Initialize Chroma client (persistent)
-    client = chromadb.PersistentClient(path="./chroma")
+    client = chromadb.PersistentClient(path="./chroma_data")
 
     # Pick a default embedding function (OpenAI, HuggingFace, etc.)
     # Here we’ll use the default all-MiniLM-L6-v2 HuggingFace model
