@@ -8,3 +8,12 @@ data:
   GITHUB_REPO: update-chromadb
   GITHUB_WORKFLOW_FILE: update-chromadb.yml
   GITHUB_BRANCH: main
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chroma-config
+  namespace: app
+data:
+  CHROMA_DIR: chroma-test
+  S3_BUCKET: preludetx-strinh

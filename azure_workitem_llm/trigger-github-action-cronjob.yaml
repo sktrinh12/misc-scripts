@@ -42,6 +42,16 @@ spec:
                   configMapKeyRef:
                     name: github-workflow-config
                     key: GITHUB_BRANCH
+              - name: CHROMA_DIR
+                valueFrom:
+                  configMapKeyRef:
+                    name: chroma-config
+                    key: CHROMA_DIR
+              - name: S3_BUCKET
+                valueFrom:
+                  configMapKeyRef:
+                    name: chroma-config
+                    key: S3_BUCKET
             command: ["sh", "-c"]
             args:
               - |
@@ -76,7 +86,7 @@ spec:
                 echo "Running Chroma sync (S3 → PVC)..."
                 kubectl scale deploy/chromadb -n app --replicas=0
                 rm -rf /data/*
-                aws s3 sync s3://preludetx-strinh/chroma-test /data --delete
+                aws s3 sync s3://$S3_BUCKET/$CHROMA_DIR /data --delete
                 kubectl scale deploy/chromadb -n app --replicas=1
                 echo "All done!"
             volumeMounts:
