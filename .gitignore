@@ -5,4 +5,4 @@ results
 terraform
 /azure_workitem_llm/chroma/
 __pycache__
-chroma_data
+chroma_data*
