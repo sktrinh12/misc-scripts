@@ -382,62 +382,35 @@ def calc_ltcg_tax(ltcg_pref, qdiv, ordinary_taxable, C):
 # QBI — SEC. 199A
 # ══════════════════════════════════════════════════════════════════════════════
 
-def calc_qbi(net_biz, taxable_ex_ltcg, C, feie_excl=0.0, us_work_pct=1.0):
+def calc_qbi(net_biz, taxable_ex_ltcg, C, feie_excl=0.0):
     """
     Sec. 199A — 20% deduction on Qualified Business Income.
 
-    TWO reductions apply before computing the 20%:
+    QBI = net business income minus any FEIE-excluded amount.
+    Per Reg. §1.199A-3(b)(2)(ii)(I), income excluded under Form 2555
+    is explicitly not QBI. That is the only statutory reduction to the base.
 
-    1. FEIE exclusion (settled law):
-       Per Reg. §1.199A-3(b)(2)(ii)(I), income excluded under Form 2555 is
-       explicitly not QBI. Reduction is dollar-for-dollar.
+    Physical location / days worked on US soil do NOT factor into QBI.
+    The test is whether the income is from a qualified trade or business —
+    not where the work was geographically performed.
 
-    2. Geographic sourcing (unsettled — use --us-work-pct to model):
-       Per §199A(c)(3)(B), QBI requires income "effectively connected with
-       a trade or business within the United States" (§864(c)). Reg.
-       §1.199A-3(b)(1)(i) applies §864(c) as if the taxpayer were a
-       nonresident alien — meaning work performed abroad produces
-       foreign-source income that may NOT qualify as QBI.
-       IRS has not issued direct guidance for US citizens splitting time
-       between US and foreign soil. The --us-work-pct flag lets you model
-       both the conservative position (prorate by days on US soil) and the
-       aggressive position (100% QBI, physical location irrelevant).
-
-    The phase-out threshold uses taxable_ex_ltcg (ordinary taxable income
-    before this deduction) — unaffected by FEIE since AGI is already reduced.
+    Phase-out uses taxable_ex_ltcg (ordinary taxable income before this
+    deduction) as the income test.
     """
-    us_work_pct = clamp(us_work_pct, lo=0.0, hi=1.0)
-
-    # Step 1: remove FEIE-excluded income (explicit statutory exclusion)
-    after_feie = clamp(net_biz - feie_excl)
-
-    # Step 2: prorate to US-performed work (geographic sourcing position)
-    qbi_base = clamp(after_feie * us_work_pct)
-
+    qbi_base = clamp(net_biz - feie_excl)
     if qbi_base <= 0:
-        if feie_excl >= net_biz:
-            return 0.0, "No QBI — all income excluded via FEIE (Reg. §1.199A-3(b)(2)(ii)(I))"
-        return 0.0, "No QBI after geographic sourcing proration"
+        return 0.0, "No QBI — all income excluded via FEIE (Reg. §1.199A-3(b)(2)(ii)(I))"
 
-    # Build a note explaining what reduced the base
-    notes = []
-    if feie_excl > 0:
-        notes.append(f"FEIE excluded ${feie_excl:,.0f}")
-    if us_work_pct < 1.0:
-        foreign_pct = (1.0 - us_work_pct) * 100
-        notes.append(f"{foreign_pct:.0f}% foreign-performed (§864(c) sourcing — see note)")
-    note_suffix = f"  [{'; '.join(notes)}]" if notes else ""
-
-    # Deduction = 20% of lesser of QBI base or ordinary taxable income
+    feie_note = f"  [QBI base net of FEIE exclusion: ${feie_excl:,.0f}]" if feie_excl > 0 else ""
     base = clamp(min(qbi_base, taxable_ex_ltcg) * QBI_RATE)
 
     if taxable_ex_ltcg <= C["qbi_threshold"]:
-        return base, f"Below threshold — 20% of ${qbi_base:,.2f} QBI{note_suffix}"
+        return base, f"Below threshold — 20% of ${qbi_base:,.2f} QBI{feie_note}"
     if taxable_ex_ltcg >= C["qbi_threshold"] + C["qbi_phaseout"]:
-        return 0.0, f"Above phaseout ceiling — no deduction{note_suffix}"
+        return 0.0, f"Above phaseout ceiling — no deduction{feie_note}"
     ratio     = (taxable_ex_ltcg - C["qbi_threshold"]) / C["qbi_phaseout"]
     deduction = base * (1 - ratio)
-    return clamp(deduction), f"Partial phase-out ({P(ratio)} into range){note_suffix}"
+    return clamp(deduction), f"Partial phase-out ({P(ratio)} into range){feie_note}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -459,119 +432,6 @@ def ltcg_headroom_rows(full_taxable, ordinary_taxable, C):
         current  = lo <= full_taxable < (hi if hi != float("inf") else full_taxable + 1)
         rows.append(dict(rate=rate, lo=lo, hi=hi, headroom=headroom, current=current))
     return rows
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# GEOGRAPHIC SOURCING — US DAY + EARNINGS COUNTER
-# ══════════════════════════════════════════════════════════════════════════════
-
-def resolve_us_periods(us_periods: list[str] | None, tax_year: int,
-                       net_biz: float) -> dict:
-    """
-    Parse one or more period strings in the format:
-        YYYY-MM-DD:YYYY-MM-DD:AMOUNT   (preferred — explicit earnings)
-        YYYY-MM-DD:YYYY-MM-DD          (fallback — prorates by day count)
-
-    Rules:
-    - If ALL periods include an AMOUNT, the QBI base = sum of US amounts.
-    - If ANY period omits AMOUNT, we fall back to day-count proration for
-      that period and warn the user.
-    - Days are clipped to the tax year; overlapping ranges are de-duped.
-    - AMOUNT is the net income earned during that stint (not gross).
-
-    Returns a dict with enough info for both calculation and display.
-    """
-    from datetime import date, timedelta
-
-    year_start = date(tax_year, 1, 1)
-    year_end   = date(tax_year, 12, 31)
-    total_days = (year_end - year_start).days + 1
-
-    if not us_periods:
-        return dict(
-            us_days=total_days, foreign_days=0, total_days=total_days,
-            us_pct=1.0, us_earnings=net_biz, foreign_earnings=0.0,
-            earnings_based=False, periods=[], error=None,
-            note="No --us-period given — assuming 100% US work (aggressive QBI position)"
-        )
-
-    us_day_set   = set()
-    parsed       = []
-    us_earnings  = 0.0
-    all_have_amt = True
-    any_have_amt = False
-    error        = None
-
-    for period_str in us_periods:
-        try:
-            parts = period_str.strip().split(":")
-            # Support both DATE:DATE and DATE:DATE:AMOUNT
-            # Dates are YYYY-MM-DD so each is 10 chars; amount is the 3rd colon-segment
-            if len(parts) == 3:
-                start  = date.fromisoformat(parts[0].strip())
-                end    = date.fromisoformat(parts[1].strip())
-                amount = float(parts[2].replace(",", "").strip())
-                has_amount = True
-                any_have_amt = True
-            elif len(parts) == 2:
-                start  = date.fromisoformat(parts[0].strip())
-                end    = date.fromisoformat(parts[1].strip())
-                amount = None
-                has_amount = False
-                all_have_amt = False
-            else:
-                raise ValueError("expected format YYYY-MM-DD:YYYY-MM-DD or YYYY-MM-DD:YYYY-MM-DD:AMOUNT")
-
-            if end < start:
-                raise ValueError(f"end {end} is before start {start}")
-
-            clipped_start = max(start, year_start)
-            clipped_end   = min(end,   year_end)
-            clipped_days  = 0
-
-            if clipped_start <= clipped_end:
-                d = clipped_start
-                while d <= clipped_end:
-                    us_day_set.add(d)
-                    d += timedelta(days=1)
-                clipped_days = (clipped_end - clipped_start).days + 1
-
-            if has_amount:
-                us_earnings += amount
-
-            parsed.append(dict(
-                start=start, end=end,
-                clipped_days=clipped_days,
-                amount=amount,
-                has_amount=has_amount,
-            ))
-
-        except Exception as e:
-            error = f"Could not parse --us-period '{period_str}': {e}"
-            break
-
-    us_days      = len(us_day_set)
-    foreign_days = total_days - us_days
-
-    if all_have_amt and any_have_amt:
-        # Best case: every period has an explicit amount
-        earnings_based   = True
-        us_earnings      = min(us_earnings, net_biz)   # can't exceed total net biz
-        foreign_earnings = max(0.0, net_biz - us_earnings)
-        us_pct           = us_earnings / net_biz if net_biz > 0 else 0.0
-    else:
-        # Fallback: prorate by day count
-        earnings_based   = False
-        us_pct           = us_days / total_days
-        us_earnings      = net_biz * us_pct
-        foreign_earnings = net_biz - us_earnings
-
-    return dict(
-        us_days=us_days, foreign_days=foreign_days, total_days=total_days,
-        us_pct=us_pct, us_earnings=us_earnings, foreign_earnings=foreign_earnings,
-        earnings_based=earnings_based, periods=parsed, error=error, note=None,
-        all_have_amt=all_have_amt, any_have_amt=any_have_amt,
-    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -617,12 +477,8 @@ def calculate(a, C):
     preferred        = cg["ltcg_pref"] + a.qdiv
     ordinary_pre     = clamp(taxable_pre_qbi - preferred)
 
-    _us = getattr(a, "us_periods", None)
-    geo = resolve_us_periods(_us, C["_year"], net_biz)
-    us_work_pct = geo["us_pct"]
     qbi_ded, qbi_note = calc_qbi(net_biz, ordinary_pre, C,
-                                  feie_excl=feie_excl,
-                                  us_work_pct=us_work_pct) if a.qbi else (0.0, "QBI disabled")
+                                  feie_excl=feie_excl) if a.qbi else (0.0, "QBI disabled")
 
     taxable           = clamp(taxable_pre_qbi - qbi_ded)
     ordinary_tax_base = clamp(taxable - preferred)
@@ -652,7 +508,7 @@ def calculate(a, C):
         solo_ee=solo_ee, health_ins=a.health_insurance, student_loan=student_loan,
         agi=agi, deduction=deduction, ded_label=ded_label,
         itemized=itemized, std_deduction=C["std_deduction"],
-        qbi_ded=qbi_ded, qbi_note=qbi_note, geo=geo,
+        qbi_ded=qbi_ded, qbi_note=qbi_note,
         taxable=taxable, ordinary_tax_base=ordinary_tax_base, preferred=preferred,
         ord_tax=ord_tax, ord_breakdown=ord_breakdown,
         ltcg_tax=ltcg_tax, ltcg_breakdown=ltcg_breakdown,
@@ -807,38 +663,10 @@ def render(r, a):
         out.append(row("QBI Deduction (Sec. 199A)", -r["qbi_ded"],
                        r["qbi_note"], val_style=BOLD + BGREEN))
 
-    # QBI geographic sourcing display
-    geo = r["geo"]
-    if a.qbi and geo["error"]:
-        out.append(warn(f"--us-period parse error: {geo['error']}"))
-    elif a.qbi and geo["periods"]:
-        basis = "earnings" if geo["earnings_based"] else "day-count proration"
-        out.append(f"  {DIM}{CYAN}  ℹ  QBI geographic sourcing — {basis} (§199A(c)(3)(B), §864(c)):{RST}")
-        for p in geo["periods"]:
-            amt_str = f"  earned {D(p['amount']).strip()}" if p["has_amount"] else \
-                      f"  {BYELLOW}no amount given — day-count fallback{RST}{CYAN}"
-            out.append(f"  {CYAN}     {p['start']} → {p['end']}"
-                       f"  ({p['clipped_days']}d in TY {C['_year']}){amt_str}{RST}")
-        if not geo["earnings_based"] and geo["any_have_amt"]:
-            out.append(warn("Mixed periods: some have amounts, some don't — "
-                            "add :AMOUNT to every --us-period for exact QBI"))
-        elif not geo["earnings_based"]:
-            out.append(f"  {DIM}{BYELLOW}  ⚡ No amounts given — QBI prorated by day count."
-                       f" Add :AMOUNT to each --us-period for exact earnings-based QBI.{RST}")
-        us_pct_str  = f"{geo['us_pct']*100:.1f}%"
-        fgn_pct_str = f"{(1-geo['us_pct'])*100:.1f}%"
-        if geo["earnings_based"]:
-            out.append(f"  {CYAN}     US earnings {D(geo['us_earnings']).strip()}"
-                       f"  +  foreign {D(geo['foreign_earnings']).strip()}"
-                       f"  =  {D(r['net_biz']).strip()} net  →  "
-                       f"{us_pct_str} QBI / {fgn_pct_str} excluded{RST}")
-        else:
-            out.append(f"  {CYAN}     {geo['us_days']}d US  +  {geo['foreign_days']}d abroad"
-                       f"  =  {geo['total_days']}d total  →  "
-                       f"{us_pct_str} QBI / {fgn_pct_str} excluded{RST}")
-    elif a.qbi and r["qbi_ded"] > 0:
-        out.append(f"  {DIM}{BYELLOW}  ⚡ QBI note: §199A(c)(3)(B) may limit QBI to US-performed work only."
-                   f" If you worked abroad, add --us-period YYYY-MM-DD:YYYY-MM-DD:AMOUNT.{RST}")
+    # QBI FEIE note (only reduction that applies to QBI base)
+    if a.qbi and r["feie_excl"] > 0 and r["qbi_ded"] > 0:
+        out.append(f"  {DIM}{CYAN}  ℹ  QBI base reduced by FEIE exclusion"
+                   f" (Reg. §1.199A-3(b)(2)(ii)(I)){RST}")
 
     out.append(div())
     out.append(subtotal_row("TAXABLE INCOME", r["taxable"]))
@@ -1190,12 +1018,6 @@ examples:
     qbi_grp = g.add_mutually_exclusive_group()
     qbi_grp.add_argument("--qbi",    dest="qbi", action="store_true",  default=True,  help="Enable QBI deduction (default: ON)")
     qbi_grp.add_argument("--no-qbi", dest="qbi", action="store_false",                help="Disable QBI deduction")
-    g.add_argument("--us-period", dest="us_periods", action="append", metavar="START:END:AMOUNT",
-                   help="US work stint: YYYY-MM-DD:YYYY-MM-DD:AMOUNT (net income earned that stint). "
-                        "AMOUNT is required for earnings-based QBI proration per §199A(c)(3)(B). "
-                        "Omit AMOUNT to fall back to day-count proration (less accurate). "
-                        "Repeat for multiple stints. "
-                        "Example: --us-period 2025-01-01:2025-04-30:32000 --us-period 2025-10-01:2025-12-31:18000")
     g.add_argument("--no-niit",   dest="niit",   action="store_false", default=True,  help="Disable NIIT (3.8%)")
     g.add_argument("--no-se-tax", dest="se_tax", action="store_false", default=True,  help="Disable Schedule SE")
 
