@@ -462,10 +462,20 @@ def calculate(a, C):
     ira_limit    = C["ira_catchup"] if a.age >= 50 else C["ira_limit"]
     trad_ira     = clamp(a.trad_ira, hi=ira_limit)
     sep_ira      = clamp(a.sep_ira)
-    solo_ee      = clamp(a.solo_401k)
+
+    # Solo 401k: employee deferral + employer profit-sharing, combined cap $70k
+    SOLO_401K_EE_LIMIT    = 23_500 if a.age < 50 else 31_000   # 2025 elective deferral limit
+    SOLO_401K_ER_LIMIT    = net_biz * 0.25                      # employer: up to 25% of net SE income
+    SOLO_401K_TOTAL_LIMIT = 70_000                              # combined ceiling (2025)
+    solo_ee = clamp(a.solo_401k,          hi=SOLO_401K_EE_LIMIT)
+    solo_er = clamp(a.solo_401k_employer, hi=SOLO_401K_ER_LIMIT)
+    # Enforce combined cap — employee side takes priority
+    solo_er = clamp(solo_er, hi=max(0, SOLO_401K_TOTAL_LIMIT - solo_ee))
+    solo_total = solo_ee + solo_er
+
     student_loan = clamp(a.student_loan, hi=2_500)
 
-    above_line = se["half_se"] + trad_ira + sep_ira + solo_ee + a.health_insurance + student_loan + feie_excl
+    above_line = se["half_se"] + trad_ira + sep_ira + solo_total + a.health_insurance + student_loan + feie_excl
     agi        = gross - above_line
 
     itemized    = clamp(a.salt, hi=10_000) + a.mortgage_interest + a.charitable + a.other_itemized
@@ -505,7 +515,8 @@ def calculate(a, C):
         cg=cg, se=se,
         feie_enabled=a.feie, feie_excl=feie_excl, feie_note=feie_note,
         above_line=above_line, trad_ira=trad_ira, sep_ira=sep_ira,
-        solo_ee=solo_ee, health_ins=a.health_insurance, student_loan=student_loan,
+        solo_ee=solo_ee, solo_er=solo_er, solo_total=solo_total,
+        health_ins=a.health_insurance, student_loan=student_loan,
         agi=agi, deduction=deduction, ded_label=ded_label,
         itemized=itemized, std_deduction=C["std_deduction"],
         qbi_ded=qbi_ded, qbi_note=qbi_note,
@@ -639,12 +650,13 @@ def render(r, a):
 
     # ── Above-the-line deductions ─────────────────────────────────────────────
     se = r["se"]
-    atl = [("½ Self-Employment Tax",   se["half_se"],     "Line 15, Sch 1"),
-           ("Traditional IRA",         r["trad_ira"],     ""),
-           ("SEP-IRA",                 r["sep_ira"],      ""),
-           ("Solo 401(k)",             r["solo_ee"],      ""),
-           ("Health Insurance",        r["health_ins"],   "self-employed"),
-           ("Student Loan Interest",   r["student_loan"], "max $2,500")]
+    atl = [("½ Self-Employment Tax",         se["half_se"],      "Line 15, Sch 1"),
+           ("Traditional IRA",               r["trad_ira"],      ""),
+           ("SEP-IRA",                       r["sep_ira"],       ""),
+           ("Solo 401(k) — Employee",        r["solo_ee"],       f"elective deferral, max $23,500"),
+           ("Solo 401(k) — Employer",        r["solo_er"],       f"profit-sharing, max 25% net SE"),
+           ("Health Insurance",              r["health_ins"],    "self-employed"),
+           ("Student Loan Interest",         r["student_loan"],  "max $2,500")]
     shown = [(l, v, n) for (l, v, n) in atl if v]
     if shown:
         out.append(hdr(" ABOVE-THE-LINE DEDUCTIONS  (Schedule 1) ", C_HDR_ATL))
@@ -995,10 +1007,11 @@ examples:
 
     # Retirement
     g = p.add_argument_group("retirement contributions  (all reduce AGI)")
-    g.add_argument("--trad-ira",  type=float, default=0,  metavar="$", help="Traditional IRA contribution (max $7k, $8k if 50+)")
-    g.add_argument("--sep-ira",   type=float, default=0,  metavar="$", help="SEP-IRA contribution")
-    g.add_argument("--solo-401k", type=float, default=0,  metavar="$", help="Solo 401(k) employee contribution")
-    g.add_argument("--age",       type=int,   default=35, metavar="N", help="Your age (for catch-up limits, default 35)")
+    g.add_argument("--trad-ira",             type=float, default=0,  metavar="$", help="Traditional IRA contribution (max $7k, $8k if 50+)")
+    g.add_argument("--sep-ira",              type=float, default=0,  metavar="$", help="SEP-IRA employer contribution (max 25%% of net SE income, up to $70k)")
+    g.add_argument("--solo-401k",            type=float, default=0,  metavar="$", help="Solo 401(k) employee elective deferral (max $23,500; $31,000 if 50+)")
+    g.add_argument("--solo-401k-employer",   type=float, default=0,  metavar="$", help="Solo 401(k) employer profit-sharing contribution (max 25%% net SE; combined employee+employer cap $70k)")
+    g.add_argument("--age",                  type=int,   default=35, metavar="N", help="Your age (for catch-up limits, default 35)")
 
     # Deductions
     g = p.add_argument_group("deductions  (Schedule A — itemized)")
