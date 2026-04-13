@@ -464,14 +464,37 @@ def calculate(a, C):
     sep_ira      = clamp(a.sep_ira)
 
     # Solo 401k: employee deferral + employer profit-sharing, combined cap $70k
-    SOLO_401K_EE_LIMIT    = 23_500 if a.age < 50 else 31_000   # 2025 elective deferral limit
-    SOLO_401K_ER_LIMIT    = net_biz * 0.25                      # employer: up to 25% of net SE income
-    SOLO_401K_TOTAL_LIMIT = 70_000                              # combined ceiling (2025)
-    solo_ee = clamp(a.solo_401k,          hi=SOLO_401K_EE_LIMIT)
-    solo_er = clamp(a.solo_401k_employer, hi=SOLO_401K_ER_LIMIT)
-    # Enforce combined cap — employee side takes priority
-    solo_er = clamp(solo_er, hi=max(0, SOLO_401K_TOTAL_LIMIT - solo_ee))
+    # IRS Pub 560 formula: employer limit = 25% × (net_profit − ½ SE tax)
+    # The ½ SE tax must be computed first — which is why the effective rate on
+    # raw net profit works out to ~20%, not 25%.
+    SOLO_401K_EE_LIMIT    = 23_500 if a.age < 50 else 31_000
+    SOLO_401K_TOTAL_LIMIT = 70_000
+    solo_er_comp          = clamp(net_biz - se["half_se"])      # compensation base per IRS
+    solo_er_pct_limit     = solo_er_comp * 0.25                 # 25% of compensation
+    solo_er_combined_room = clamp(SOLO_401K_TOTAL_LIMIT - clamp(a.solo_401k, hi=SOLO_401K_EE_LIMIT))
+    solo_er_max           = min(solo_er_pct_limit, solo_er_combined_room)  # true max allowed
+
+    solo_ee    = clamp(a.solo_401k,          hi=SOLO_401K_EE_LIMIT)
+    solo_er    = clamp(a.solo_401k_employer, hi=solo_er_max)
     solo_total = solo_ee + solo_er
+
+    # Full contribution limit breakdown (for --max-solo-er display)
+    solo_er_limit_detail = dict(
+        net_biz          = net_biz,
+        half_se          = se["half_se"],
+        comp_base        = solo_er_comp,       # net_biz − ½ SE tax
+        pct_limit        = solo_er_pct_limit,  # 25% × comp_base
+        ee_contributed   = solo_ee,
+        combined_room    = solo_er_combined_room,
+        max_er           = solo_er_max,        # min(pct_limit, combined_room)
+        er_contributed   = solo_er,
+        er_remaining     = clamp(solo_er_max - solo_er),
+        total_limit      = SOLO_401K_TOTAL_LIMIT,
+        total_used       = solo_total,
+        total_remaining  = clamp(SOLO_401K_TOTAL_LIMIT - solo_total),
+        binding_constraint = "25% comp limit" if solo_er_pct_limit < solo_er_combined_room
+                             else "$70k combined cap",
+    )
 
     student_loan = clamp(a.student_loan, hi=2_500)
 
@@ -516,6 +539,7 @@ def calculate(a, C):
         feie_enabled=a.feie, feie_excl=feie_excl, feie_note=feie_note,
         above_line=above_line, trad_ira=trad_ira, sep_ira=sep_ira,
         solo_ee=solo_ee, solo_er=solo_er, solo_total=solo_total,
+        solo_er_limit_detail=solo_er_limit_detail,
         health_ins=a.health_insurance, student_loan=student_loan,
         agi=agi, deduction=deduction, ded_label=ded_label,
         itemized=itemized, std_deduction=C["std_deduction"],
@@ -908,8 +932,71 @@ def render(r, a):
         out.append(f"\n  {DIM}{GRAY}  Carryover = unused net loss above $3k/yr cap; deductible in future years."
                    f"\n  Model prior-year carryovers now with --loss-carryover <amount>.{RST}")
 
+    # ── Solo 401k employer max calculator ────────────────────────────────────
+    if a.max_solo_er:
+        d = r["solo_er_limit_detail"]
+        C_HDR_401 = _c(48) + BOLD + BLACK
+        out.append(hdr(" SOLO 401(k) EMPLOYER CONTRIBUTION LIMIT ", C_HDR_401))
+        out.append(f"\n  {BOLD}{BWHITE}▸ IRS PUB 560 FORMULA: 25% × (net profit − ½ SE tax){RST}")
+        out.append(f"  {GRAY}  This is why you'll see '~20% of net profit' as a shorthand — the ½ SE{RST}")
+        out.append(f"  {GRAY}  tax deduction is itself derived from net profit, so the net effect on{RST}")
+        out.append(f"  {GRAY}  raw profit is approximately 20%, but the exact number is computed below.{RST}")
 
+        out.append(f"\n  {DIM}{WHITE}  {'Step':<46}{'Amount':>14}{RST}")
+        out.append(f"  {C_DIV}{'─' * 62}{RST}")
 
+        def step(label, value, note="", positive=True):
+            vc = BWHITE if positive else BGREEN
+            return (f"  {WHITE}{label:<46}{RST}"
+                    f"{vc}{D(value)}{RST}"
+                    + (f"  {GRAY}[{note}]{RST}" if note else ""))
+
+        out.append(step("Net Business Income  (Schedule C profit)", d["net_biz"]))
+        out.append(step("− ½ Self-Employment Tax  (Sch 1 deduction)", d["half_se"], positive=False))
+        out.append(f"  {C_DIV}{'─' * 62}{RST}")
+        out.append(step("= Compensation Base", d["comp_base"], "net_biz − ½ SE tax"))
+        out.append(step("× 25%  →  Max employer by % rule", d["pct_limit"],
+                         "IRS plan contribution rate for self-employed"))
+
+        out.append(f"\n  {DIM}{WHITE}  {'Limit check':<46}{'Amount':>14}{RST}")
+        out.append(f"  {C_DIV}{'─' * 62}{RST}")
+        out.append(step("25% compensation limit", d["pct_limit"]))
+        out.append(step("$70k combined ceiling − employee contrib",
+                         d["combined_room"],
+                         f"$70,000 − ${d['ee_contributed']:,.0f} employee"))
+
+        binding_col = BYELLOW if d["binding_constraint"] == "$70k combined cap" else BGREEN
+        out.append(f"\n  {WHITE}  Binding constraint:{RST}  "
+                   f"{binding_col}{BOLD}{d['binding_constraint']}{RST}")
+        out.append(f"  {C_DIV}{'─' * 62}{RST}")
+
+        out.append(f"  {WHITE}  {'Max employer contribution you can make:':<46}{RST}"
+                   f"{C_GOOD}{BOLD}{D(d['max_er'])}{RST}")
+
+        if d["er_contributed"] > 0:
+            out.append(f"\n  {WHITE}  {'Already passed via --solo-401k-employer:':<46}{RST}"
+                       f"{BYELLOW}{D(d['er_contributed'])}{RST}")
+            remain_col = BGREEN if d["er_remaining"] > 0.5 else GRAY
+            out.append(f"  {WHITE}  {'Remaining room:':<46}{RST}"
+                       f"{remain_col}{BOLD}{D(d['er_remaining'])}{RST}")
+
+            if d["er_remaining"] < -0.5:
+                out.append(warn(f"Contribution ${d['er_contributed']:,.2f} exceeds limit "
+                                f"${d['max_er']:,.2f} — script already capped it"))
+        else:
+            out.append(f"\n  {CYAN}  → Pass --solo-401k-employer {d['max_er']:.0f} to claim the full deduction.{RST}")
+
+        out.append(f"\n  {DIM}{WHITE}  {'Combined summary':<46}{'Amount':>14}{RST}")
+        out.append(f"  {C_DIV}{'─' * 62}{RST}")
+        out.append(step("Employee deferral (--solo-401k)",       d["ee_contributed"]))
+        out.append(step("Employer contribution (--solo-401k-employer)", d["er_contributed"]))
+        out.append(f"  {C_DIV}{'─' * 62}{RST}")
+        total_col = BGREEN if d["total_remaining"] > 0.5 else BRED
+        out.append(f"  {WHITE}  {'Total contributed:':<46}{RST}{BOLD}{BWHITE}{D(d['total_used'])}{RST}")
+        out.append(f"  {WHITE}  {'Remaining to $70k cap:':<46}{RST}{total_col}{BOLD}{D(d['total_remaining'])}{RST}")
+
+        out.append(f"\n  {DIM}{GRAY}  Note: SEP-IRA uses the same 25% compensation formula but cannot be"
+                   f"\n  combined with a Solo 401k employer contribution for the same business.{RST}")
 
     if a.what_if:
         out.append(hdr(" WHAT-IF SCENARIOS ", C_HDR_WHIF))
@@ -1036,11 +1123,14 @@ examples:
 
     # Display
     g = p.add_argument_group("display")
-    g.add_argument("--brackets", action="store_true", help="Show bracket headroom (ordinary + LTCG)")
-    g.add_argument("--verbose",  action="store_true", help="Show per-bracket tax breakdown")
-    g.add_argument("--what-if",  action="store_true", help="Show FEIE/QBI/itemize scenario comparison")
-    g.add_argument("--headroom", action="store_true",
+    g.add_argument("--brackets",    action="store_true", help="Show bracket headroom (ordinary + LTCG)")
+    g.add_argument("--verbose",     action="store_true", help="Show per-bracket tax breakdown")
+    g.add_argument("--what-if",     action="store_true", help="Show FEIE/QBI/itemize scenario comparison")
+    g.add_argument("--headroom",    action="store_true",
                    help="Show capital gains planning: 0%% room, losses to shift bracket, income headroom")
+    g.add_argument("--max-solo-er", action="store_true",
+                   help="Show Solo 401(k) employer contribution limit breakdown "
+                        "(IRS Pub 560: 25%% × (net profit − ½ SE tax), capped at $70k combined)")
 
     # Year & constant overrides
     g = p.add_argument_group(
