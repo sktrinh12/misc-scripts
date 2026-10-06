@@ -1,8 +1,8 @@
 import argparse
 import csv
-import sqlite3
 from datetime import datetime
 import os
+import sqlite3
 
 home_path = os.path.expanduser("~")
 db_file = "chase-expenses.db"
@@ -28,6 +28,8 @@ def insert_expenses(rows):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
+    # Note: Keep standard columns without rigid UNIQUE constraints
+    # so we can intentionally insert valid duplicates.
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,7 +40,37 @@ def insert_expenses(rows):
         )
     """)
 
+    imported_count = 0
+
     for row in rows:
+        date, description, category, amount = row
+
+        # Check if an identical entry already exists
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM expenses
+            WHERE date = ? AND description = ? AND amount = ?
+        """,
+            (date, description, amount),
+        )
+        exists = cursor.fetchone()[0]
+
+        if exists > 0:
+            print("\n" + "!" * 50)
+            print(f"⚠️  POSSIBLE DUPLICATE FOUND IN DATABASE:")
+            print(f"  Date:        {date}")
+            print(f"  Description: {description}")
+            print(f"  Category:    {category}")
+            print(f"  Amount:      ${abs(amount):.2f}")
+            print("!" * 50)
+
+            # Interactive Yes/No prompt
+            choice = input("Is this a separate/legitimate charge? (y/n): ").strip().lower()
+            if choice != 'y':
+                print("Skipping entry.")
+                continue
+
+        # Insert entry if it's unique OR explicitly approved by user
         cursor.execute(
             """
             INSERT INTO expenses (date, description, category, amount)
@@ -46,9 +78,11 @@ def insert_expenses(rows):
         """,
             row,
         )
+        imported_count += 1
 
     conn.commit()
     conn.close()
+    return imported_count
 
 
 def parse_csv_file(filepath):
@@ -56,12 +90,14 @@ def parse_csv_file(filepath):
         {  # Format 1
             "DATE": "DATE",
             "DESCR": "DESCR",
+            "MEMO": "MEMO",
             "CATEGORY": "CATEGORY",
             "AMOUNT": "AMOUNT",
         },
         {  # Format 2
             "DATE": "Transaction Date",
             "DESCR": "Description",
+            "MEMO": "Memo",
             "CATEGORY": "Category",
             "AMOUNT": "Amount",
         },
@@ -71,8 +107,12 @@ def parse_csv_file(filepath):
         fieldnames = set(reader.fieldnames or [])
 
         mapping = None
+        # Core columns required to identify header format
+        required_keys = ["DATE", "DESCR", "CATEGORY", "AMOUNT"]
+
         for candidate in header_mappings:
-            if set(candidate.values()).issubset(fieldnames):
+            required_headers = {candidate[k] for k in required_keys}
+            if required_headers.issubset(fieldnames):
                 mapping = candidate
                 break
 
@@ -80,10 +120,22 @@ def parse_csv_file(filepath):
             raise ValueError(f"Unrecognized header format. Found: {reader.fieldnames}")
 
         parsed_rows = []
+        memo_col = mapping["MEMO"]
+
         for line in reader:
             try:
                 date = parse_date(line[mapping["DATE"]])
                 description = line[mapping["DESCR"]].strip()
+
+                # Retrieve and format Memo if present in row
+                memo = line.get(memo_col, "").strip() if memo_col in fieldnames else ""
+
+                if memo:
+                    # Append period if description doesn't already end with terminal punctuation
+                    if not description.endswith(('.', '!', '?')):
+                        description += "."
+                    description = f"{description} {memo}"
+
                 category = line[mapping["CATEGORY"]].strip()
                 amount = normalize_amount(line[mapping["AMOUNT"]])
                 parsed_rows.append((date, description, category, amount))
@@ -105,8 +157,11 @@ def main():
 
     try:
         expenses = parse_csv_file(args.csv_file)
-        insert_expenses(expenses)
-        print(f"Imported {len(expenses)} expenses into {db_file}")
+        # Reverse list so older entries are prompted/inserted first
+        expenses.reverse()
+
+        count = insert_expenses(expenses)
+        print(f"\nSuccessfully processed and added {count} expense records into {db_file}!")
     except Exception as e:
         print(f"Error processing file: {e}")
 
