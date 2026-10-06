@@ -50,6 +50,9 @@ TAX_TABLES = {
         qbi_phaseout   = 50_000,
         niit_threshold = 200_000,
         amt_threshold  = 200_000,
+        solo_401k_ee   = 23_000,
+        solo_401k_cu   = 30_000,
+        solo_401k_tot  = 69_000,
     ),
     2025: dict(
         ordinary_brackets = [
@@ -75,33 +78,37 @@ TAX_TABLES = {
         qbi_phaseout   = 50_000,
         niit_threshold = 200_000,
         amt_threshold  = 200_000,
+        solo_401k_ee   = 23_500,
+        solo_401k_cu   = 31_000,
+        solo_401k_tot  = 70_000,
     ),
-    # 2026 — estimated/projected (IRS has not published official figures yet)
-    # Based on ~2.5% CPI inflation adjustments; update once IRS releases Rev. Proc.
     2026: dict(
         ordinary_brackets = [
-            (0,        12_200,       0.10),
-            (12_200,   49_600,       0.12),
-            (49_600,   105_800,      0.22),
-            (105_800,  201_900,      0.24),
-            (201_900,  256_400,      0.32),
-            (256_400,  641_100,      0.35),
-            (641_100,  float("inf"), 0.37),
+            (0,        12_400,       0.10),
+            (12_400,   50_400,       0.12),
+            (50_400,   105_700,      0.22),
+            (105_700,  201_775,      0.24),
+            (201_775,  256_225,      0.32),
+            (256_225,  640_600,      0.35),
+            (640_600,  float("inf"), 0.37),
         ],
         ltcg_brackets = [
-            (0,        49_500,       0.00),
-            (49_500,   546_200,      0.15),
-            (546_200,  float("inf"), 0.20),
+            (0,        49_450,       0.00),
+            (49_450,   545_500,      0.15),
+            (545_500,  float("inf"), 0.20),
         ],
-        std_deduction  = 15_350,
-        feie_limit     = 133_500,
-        ss_wage_base   = 180_300,
-        ira_limit      = 7_000,
-        ira_catchup    = 8_000,
-        qbi_threshold  = 201_900,
+        std_deduction  = 16_100,
+        feie_limit     = 132_900,
+        ss_wage_base   = 184_500,
+        ira_limit      = 7_500,
+        ira_catchup    = 8_600,
+        qbi_threshold  = 201_775,
         qbi_phaseout   = 50_000,
         niit_threshold = 200_000,
         amt_threshold  = 200_000,
+        solo_401k_ee   = 24_500,
+        solo_401k_cu   = 32_500,
+        solo_401k_tot  = 72_000,
     ),
 }
 
@@ -128,7 +135,7 @@ def _resolve_year(requested: int | None) -> tuple[int, bool]:
     else:
         y = requested
     if y in TAX_TABLES:
-        return y, (y >= 2026)
+        return y, (y >= 2027)
     # Clamp to nearest supported year
     nearest = min(SUPPORTED_YEARS, key=lambda k: abs(k - y))
     return nearest, True
@@ -463,18 +470,14 @@ def calculate(a, C):
     trad_ira     = clamp(a.trad_ira, hi=ira_limit)
     sep_ira      = clamp(a.sep_ira)
 
-    # Solo 401k: employee deferral + employer profit-sharing, combined cap $70k
-    # IRS Pub 560 formula: employer limit = 25% × (net_profit − ½ SE tax)
-    # The ½ SE tax must be computed first — which is why the effective rate on
-    # raw net profit works out to ~20%, not 25%.
-    SOLO_401K_EE_LIMIT    = 23_500 if a.age < 50 else 31_000
-    SOLO_401K_TOTAL_LIMIT = 70_000
-    solo_er_comp          = clamp(net_biz - se["half_se"])      # compensation base per IRS
-    solo_er_pct_limit     = solo_er_comp * 0.25                 # 25% of compensation
-    solo_er_combined_room = clamp(SOLO_401K_TOTAL_LIMIT - clamp(a.solo_401k, hi=SOLO_401K_EE_LIMIT))
-    solo_er_max           = min(solo_er_pct_limit, solo_er_combined_room)  # true max allowed
+    solo_ee_limit       = C["solo_401k_cu"] if a.age >= 50 else C["solo_401k_ee"]
+    solo_total_limit    = C["solo_401k_tot"]
+    solo_er_comp        = clamp(net_biz - se["half_se"])      # compensation base per IRS
+    solo_er_pct_limit   = solo_er_comp * 0.25                 # 25% of compensation
+    solo_er_combined_room = clamp(solo_total_limit - clamp(a.solo_401k, hi=solo_ee_limit))
+    solo_er_max         = min(solo_er_pct_limit, solo_er_combined_room)  # true max allowed
 
-    solo_ee    = clamp(a.solo_401k,          hi=SOLO_401K_EE_LIMIT)
+    solo_ee    = clamp(a.solo_401k,          hi=solo_ee_limit)
     solo_er    = clamp(a.solo_401k_employer, hi=solo_er_max)
     solo_total = solo_ee + solo_er
 
@@ -489,11 +492,11 @@ def calculate(a, C):
         max_er           = solo_er_max,        # min(pct_limit, combined_room)
         er_contributed   = solo_er,
         er_remaining     = clamp(solo_er_max - solo_er),
-        total_limit      = SOLO_401K_TOTAL_LIMIT,
+        total_limit      = solo_total_limit,
         total_used       = solo_total,
-        total_remaining  = clamp(SOLO_401K_TOTAL_LIMIT - solo_total),
+        total_remaining  = clamp(solo_total_limit - solo_total),
         binding_constraint = "25% comp limit" if solo_er_pct_limit < solo_er_combined_room
-                             else "$70k combined cap",
+                             else f"${solo_total_limit:,} combined cap",
     )
 
     student_loan = clamp(a.student_loan, hi=2_500)
@@ -677,7 +680,7 @@ def render(r, a):
     atl = [("½ Self-Employment Tax",         se["half_se"],      "Line 15, Sch 1"),
            ("Traditional IRA",               r["trad_ira"],      ""),
            ("SEP-IRA",                       r["sep_ira"],       ""),
-           ("Solo 401(k) — Employee",        r["solo_ee"],       f"elective deferral, max $23,500"),
+           ("Solo 401(k) — Employee",        r["solo_ee"],       f"elective deferral, max ${C['solo_401k_cu'] if a.age >= 50 else C['solo_401k_ee']:,}"),
            ("Solo 401(k) — Employer",        r["solo_er"],       f"profit-sharing, max 25% net SE"),
            ("Health Insurance",              r["health_ins"],    "self-employed"),
            ("Student Loan Interest",         r["student_loan"],  "max $2,500")]
@@ -961,11 +964,11 @@ def render(r, a):
         out.append(f"\n  {DIM}{WHITE}  {'Limit check':<46}{'Amount':>14}{RST}")
         out.append(f"  {C_DIV}{'─' * 62}{RST}")
         out.append(step("25% compensation limit", d["pct_limit"]))
-        out.append(step("$70k combined ceiling − employee contrib",
+        out.append(step(f"${d['total_limit']:,} combined ceiling − employee contrib",
                          d["combined_room"],
-                         f"$70,000 − ${d['ee_contributed']:,.0f} employee"))
+                         f"${d['total_limit']:,} − ${d['ee_contributed']:,.0f} employee"))
 
-        binding_col = BYELLOW if d["binding_constraint"] == "$70k combined cap" else BGREEN
+        binding_col = BYELLOW if "combined cap" in d["binding_constraint"] else BGREEN
         out.append(f"\n  {WHITE}  Binding constraint:{RST}  "
                    f"{binding_col}{BOLD}{d['binding_constraint']}{RST}")
         out.append(f"  {C_DIV}{'─' * 62}{RST}")
@@ -993,7 +996,7 @@ def render(r, a):
         out.append(f"  {C_DIV}{'─' * 62}{RST}")
         total_col = BGREEN if d["total_remaining"] > 0.5 else BRED
         out.append(f"  {WHITE}  {'Total contributed:':<46}{RST}{BOLD}{BWHITE}{D(d['total_used'])}{RST}")
-        out.append(f"  {WHITE}  {'Remaining to $70k cap:':<46}{RST}{total_col}{BOLD}{D(d['total_remaining'])}{RST}")
+        out.append(f"  {WHITE}  {'Remaining to ${:,} cap:'.format(d['total_limit']):<46}{RST}{total_col}{BOLD}{D(d['total_remaining'])}{RST}")
 
         out.append(f"\n  {DIM}{GRAY}  Note: SEP-IRA uses the same 25% compensation formula but cannot be"
                    f"\n  combined with a Solo 401k employer contribution for the same business.{RST}")
